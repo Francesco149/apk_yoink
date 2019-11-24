@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+
+# This is free and unencumbered software released into the public domain.
+#
+# Anyone is free to copy, modify, publish, use, compile, sell, or
+# distribute this software, either in source code form or as a compiled
+# binary, for any purpose, commercial or non-commercial, and by any
+# means.
+#
+# For more information, please refer to <http://unlicense.org/>
+
+
+from gachanator import QooAppDownloader
+import logging, sys, argparse, shutil, json
+from json.decoder import JSONDecodeError
+
+if __name__ == "__main__":
+  logging.basicConfig(level=logging.DEBUG)
+  log = logging.getLogger("apk-yoink")
+  desc = "download apk's by package name to the current directory and "
+  desc += "keep track of the latest version"
+  parser = argparse.ArgumentParser(description="download apk")
+  desc = "package name(s), such as com.klab.lovelive.allstars"
+  parser.add_argument("packages", nargs="+", metavar="", help=desc)
+  levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+  desc = f"set logging level, must be one of: {' '.join(levels)} ."
+  desc += "defaults to DEBUG"
+  parser.add_argument("--log", metavar="", help=desc)
+  desc = "show progress bar"
+  parser.add_argument("--no-progress-bar", action="store_true", help=desc)
+  args = parser.parse_args(sys.argv[1:])
+  if args.log:
+    logging.getLogger().setLevel(args.log)
+  for pkg in args.packages:
+    dl = QooAppDownloader(package_name=pkg)
+    log.info("getting hashes")
+    hashes = dl.hash()
+    log.info(f"found {len(hashes)} files")
+    try:
+      with open(pkg + ".json") as j:
+        verify_hashes = json.load(j)
+        local_hashes = [h for _, h in verify_hashes]
+      if local_hashes == hashes and dl.verify(verify_hashes):
+        log.info(f"you already have the latest version of {pkg}")
+        continue
+    except FileNotFoundError:
+      pass
+    except JSONDecodeError:
+      pass
+    fnames = []
+    for file_name, f in dl.download():
+      fnames.append(file_name)
+      log.info(f"downloading {file_name}")
+      if args.no_progress_bar:
+        with open(file_name, "wb") as dst:
+          shutil.copyfileobj(f, dst)
+      else:
+        from tqdm import tqdm
+        try:
+          total = int(f.getheader("content-length"))
+        except (KeyError, ValueError, AttributeError):
+          total = 0
+        bar = tqdm(total=total)
+        with open(file_name, "wb") as dst:
+          while True:
+            chunk = f.read(10240)
+            if len(chunk) <= 0:
+              break
+            bar.update(len(chunk))
+            dst.write(chunk)
+          bar.close()
+      f.close()
+    verify_hashes = [x for x in zip(fnames, hashes)]
+    if not dl.verify(verify_hashes):
+      log.error(f"failed to verify hashes for {pkg}")
+      continue
+    with open(pkg + ".json", "w") as j:
+      json.dump(verify_hashes, j)
